@@ -533,19 +533,33 @@ document.getElementById('btn-record-voices').onclick = () => {
 
 // Export: pack all recordings into a single .babykeys file (JSON with base64 blobs)
 document.getElementById('btn-export-rec').onclick = async () => {
+  // Read everything from IDB in one synchronous transaction
   const db = await openDB();
-  const tx = db.transaction(STORE, 'readonly');
-  const store = tx.objectStore(STORE);
-  const keys = await new Promise(r => { const q = store.getAllKeys(); q.onsuccess = () => r(q.result); });
+  const entries = await new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const store = tx.objectStore(STORE);
+    const all = [];
+    const req = store.openCursor();
+    req.onsuccess = e => {
+      const cursor = e.target.result;
+      if (cursor) { all.push({ key: cursor.key, val: cursor.value }); cursor.continue(); }
+      else res(all);
+    };
+    req.onerror = e => rej(e.target.error);
+  });
+  db.close();
+
+  // Process blobs outside the transaction
   const recordings = {};
-  for (const key of keys) {
-    const val = await new Promise(r => { const q = store.get(key); q.onsuccess = () => r(q.result); });
+  for (const { key, val } of entries) {
     const blob = val instanceof Blob ? val : val.blob;
     if (!blob) continue;
     const buf = await blob.arrayBuffer();
-    recordings[key] = { type: blob.type, data: btoa(String.fromCharCode(...new Uint8Array(buf))) };
+    const bytes = new Uint8Array(buf);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    recordings[key] = { type: blob.type, data: btoa(binary) };
   }
-  db.close();
   const json = JSON.stringify(recordings);
   const dl = document.createElement('a');
   dl.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
@@ -599,6 +613,7 @@ async function loadBundledRecordings() {
 // ── Recording session ───────────────────────────────────────────────
 let recIdx = 0;
 let recStream = null;
+let recDelayedStream = null;  // 75ms delayed stream for recording
 let recMediaRec = null;
 let recChunks = [];
 let recAnalyser = null;
@@ -627,10 +642,26 @@ async function startRecordingSession() {
     return;
   }
   recAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  await recAudioCtx.resume();
   const src = recAudioCtx.createMediaStreamSource(recStream);
+
+  // Path A: real-time AnalyserNode for VAD
   recAnalyser = recAudioCtx.createAnalyser();
   recAnalyser.fftSize = 256;
   src.connect(recAnalyser);
+
+  // Path B: 75ms delayed stream for MediaRecorder
+  // When VAD detects speech, the delayed stream is still 75ms behind,
+  // so starting the recorder at that moment captures the attack.
+  const delay = recAudioCtx.createDelay(0.2);
+  delay.delayTime.value = 0.075;
+  const dest = recAudioCtx.createMediaStreamDestination();
+  src.connect(delay);
+  delay.connect(dest);
+  recDelayedStream = dest.stream;
+
+  // Let the delay buffer and audio graph prime before first recording
+  await new Promise(r => setTimeout(r, 150));
 
   recIdx = 0;
   recPaused = false;
@@ -665,13 +696,11 @@ function showAndRecord() {
   $recStatus.textContent = 'Listening...';
   $recMeter.style.width = '0';
 
-  // Start MediaRecorder immediately so we capture the attack of speech.
-  // VAD controls when we STOP, not when we start.
+  // VAD runs on the real-time stream. MediaRecorder starts on the 75ms-delayed
+  // stream at speech onset — so the blob captures the attack without leading silence.
   recActive = true;
   recChunks = [];
-  recMediaRec = new MediaRecorder(recStream);
-  recMediaRec.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
-  recMediaRec.start(50);
+  recMediaRec = null;
 
   const freqData = new Uint8Array(recAnalyser.frequencyBinCount);
   let speaking = false, silenceStart = null;
@@ -686,7 +715,14 @@ function showAndRecord() {
     $recMeter.style.width = Math.min(100, level * 1.5) + '%';
 
     if (level > THRESH) {
-      speaking = true;
+      if (!speaking) {
+        speaking = true;
+        // Start recorder on the DELAYED stream — it's 75ms behind real-time,
+        // so the attack is already in the stream waiting to be captured.
+        recMediaRec = new MediaRecorder(recDelayedStream);
+        recMediaRec.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
+        recMediaRec.start(50);
+      }
       silenceStart = null;
       $recStatus.textContent = 'Recording...';
     } else if (speaking) {
