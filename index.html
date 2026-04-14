@@ -1,0 +1,718 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Baby Keys</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  height: 100%; overflow: hidden;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  user-select: none; -webkit-user-select: none;
+}
+#main {
+  height: 100%; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  background: #fafafa; position: relative;
+}
+#display {
+  font-weight: 800; line-height: 1;
+}
+#display.show {
+  animation: popIn 0.2s ease-out;
+}
+#prompt {
+  font-size: 5vmin; color: #ccc; font-weight: 300;
+  animation: pulse 2s ease-in-out infinite;
+}
+#prompt.hidden { display: none; }
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+@keyframes popIn {
+  0% { transform: scale(0.85); }
+  50% { transform: scale(1.08); }
+  100% { transform: scale(1); }
+}
+#history {
+  position: absolute; bottom: 2.5vh;
+  display: flex; gap: 1.5vmin;
+}
+.hist {
+  width: 8vmin; height: 8vmin;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 1.5vmin; font-weight: 700;
+  transition: all 0.3s ease;
+}
+.hist:nth-last-child(1) { font-size: 4.5vmin; opacity: 0.55; }
+.hist:nth-last-child(2) { font-size: 4vmin; opacity: 0.40; }
+.hist:nth-last-child(3) { font-size: 3.5vmin; opacity: 0.30; }
+.hist:nth-last-child(4) { font-size: 3vmin; opacity: 0.22; }
+.hist:nth-last-child(5) { font-size: 2.5vmin; opacity: 0.15; }
+
+/* Settings gear */
+#gear {
+  position: absolute; top: 1.5vh; right: 1.5vw;
+  width: 6vmin; height: 6vmin; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 3.5vmin; color: #d0d0d0; cursor: pointer;
+  background: transparent; border: none;
+  -webkit-tap-highlight-color: transparent;
+}
+#gear-ring {
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  background: conic-gradient(#4ECDC4 calc(var(--hold) * 1%), transparent 0);
+  mask: radial-gradient(circle, transparent 55%, black 57%);
+  -webkit-mask: radial-gradient(circle, transparent 55%, black 57%);
+  pointer-events: none;
+  --hold: 0;
+}
+
+/* Overlays */
+.overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+}
+.overlay.hidden { display: none; }
+.modal {
+  background: #fff; border-radius: 16px;
+  padding: 28px 32px; max-width: 480px; width: 92%;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.25);
+}
+.modal h2 { margin-bottom: 16px; font-size: 22px; }
+.modal p { margin-bottom: 14px; color: #555; font-size: 15px; }
+.btn {
+  display: inline-block; padding: 10px 22px; border: none; border-radius: 8px;
+  font-size: 15px; font-weight: 600; cursor: pointer; margin: 4px;
+  transition: filter 0.15s;
+}
+.btn:hover { filter: brightness(0.92); }
+.btn-p { background: #4ECDC4; color: #fff; }
+.btn-s { background: #e8e8e8; color: #333; }
+.btn-d { background: #FF6B6B; color: #fff; }
+
+/* Recording overlay */
+#rec-overlay .modal { max-width: 420px; text-align: center; }
+#rec-char {
+  font-size: 28vmin; font-weight: 800; line-height: 1.1;
+  margin: 10px 0 4px;
+}
+#rec-name { font-size: 18px; color: #888; margin-bottom: 18px; }
+#rec-status {
+  font-size: 14px; color: #999; margin-bottom: 12px;
+  min-height: 20px;
+}
+#rec-progress { font-size: 13px; color: #aaa; margin-bottom: 8px; }
+#rec-meter {
+  width: 60%; height: 6px; margin: 0 auto 16px;
+  background: #eee; border-radius: 3px; overflow: hidden;
+}
+#rec-meter-fill {
+  height: 100%; width: 0; background: #4ECDC4;
+  transition: width 0.08s;
+}
+.rec-row { margin: 6px 0; }
+.hidden { display: none !important; }
+#start-screen {
+  height: 100%; display: flex; align-items: center; justify-content: center;
+  background: #fafafa;
+}
+#btn-start {
+  font-size: 6vmin; font-weight: 700; padding: 3vmin 6vmin;
+  border: none; border-radius: 2vmin; cursor: pointer;
+  background: #4ECDC4; color: #fff;
+  font-family: inherit;
+}
+#btn-start:hover { filter: brightness(0.92); }
+</style>
+</head>
+<body>
+
+<div id="start-screen">
+  <button id="btn-start">Start Baby Keys</button>
+</div>
+
+<div id="main" class="hidden">
+  <div id="display"></div>
+  <div id="prompt">Press any key!</div>
+  <div id="history"></div>
+  <button id="gear" aria-label="Settings">
+    <div id="gear-ring"></div>
+    <span>&#9881;</span>
+  </button>
+</div>
+
+<div id="settings-overlay" class="overlay hidden">
+  <div class="modal">
+    <h2>Settings</h2>
+    <p id="rec-count"></p>
+    <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-start">
+      <button class="btn btn-p" id="btn-record-voices">Record Custom Voices</button>
+      <button class="btn btn-d" id="btn-clear-rec">Clear All Recordings</button>
+      <button class="btn btn-s" id="btn-close-settings">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="rec-overlay" class="overlay hidden">
+  <div class="modal">
+    <div id="rec-progress"></div>
+    <div id="rec-char"></div>
+    <div id="rec-name"></div>
+    <div id="rec-meter"><div id="rec-meter-fill"></div></div>
+    <div id="rec-status"></div>
+    <div class="rec-row">
+      <button class="btn btn-s" id="btn-rec-back">Back</button>
+      <button class="btn btn-s" id="btn-rec-skip">Skip</button>
+      <button class="btn btn-s" id="btn-rec-done">Done</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Config ──────────────────────────────────────────────────────────
+const COLORS = [
+  '#FF6B6B','#4ECDC4','#45B7D1','#96CEB4','#FFEAA7',
+  '#DDA0DD','#F7DC6F','#BB8FCE','#85C1E9','#F1948A',
+  '#82E0AA','#F8C471','#AED6F1','#D2B4DE','#E59866',
+];
+
+const IGNORE = new Set([
+  'Control','Shift','Alt','Meta','CapsLock','NumLock','ScrollLock',
+  'F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','F11','F12',
+  'PrintScreen','Pause','ContextMenu','Dead','Unidentified','Process',
+]);
+
+const DISPLAY_MAP = {
+  ' ':'&#x2423;', Enter:'\u21B5', Tab:'\u21E5', Backspace:'\u232B',
+  Escape:'Esc', ArrowUp:'\u2191', ArrowDown:'\u2193',
+  ArrowLeft:'\u2190', ArrowRight:'\u2192', Delete:'Del',
+  Home:'Home', End:'End', PageUp:'PgUp', PageDown:'PgDn', Insert:'Ins',
+};
+
+const SPEAK_MAP = {
+  ' ':'space', Enter:'enter', Tab:'tab', Backspace:'backspace',
+  Escape:'escape', ArrowUp:'up', ArrowDown:'down',
+  ArrowLeft:'left', ArrowRight:'right', Delete:'delete',
+  Home:'home', End:'end', PageUp:'page up', PageDown:'page down',
+  Insert:'insert',
+  '.':'period', ',':'comma', '!':'exclamation mark', '?':'question mark',
+  ';':'semicolon', ':':'colon', "'":"apostrophe", '"':'quotation mark',
+  '-':'dash', '+':'plus', '=':'equals', '/':'slash', '\\':'backslash',
+  '(':'open parenthesis', ')':'close parenthesis',
+  '[':'open bracket', ']':'close bracket',
+  '{':'open brace', '}':'close brace',
+  '@':'at sign', '#':'hash', '$':'dollar sign', '%':'percent',
+  '^':'caret', '&':'ampersand', '*':'asterisk', '~':'tilde',
+  '`':'backtick', '<':'less than', '>':'greater than',
+  '_':'underscore', '|':'pipe',
+};
+
+const RECORD_SEQ = [
+  ...'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+  ...'0123456789',
+  ' ','.',',','!','?',';',':',
+  "'",'"','-','+','=','/','\\',
+  '(',')','{','}','[',']',
+  '@','#','$','%','^','&','*','~','`','<','>','_','|',
+  'Enter','Tab','Backspace','Escape',
+  'ArrowUp','ArrowDown','ArrowLeft','ArrowRight',
+];
+
+// ── State ───────────────────────────────────────────────────────────
+let history = [];
+let overlayOpen = false;
+let colorIdx = 0;
+let currentSource = null;  // Audio element for stopping playback
+let currentUtterance = null;  // prevent GC of SpeechSynthesisUtterance
+let speakTimeout = null;
+const audioCache = new Map();  // key -> objectURL, preloaded on start
+
+// ── Elements ────────────────────────────────────────────────────────
+const $display   = document.getElementById('display');
+const $prompt    = document.getElementById('prompt');
+const $history   = document.getElementById('history');
+const $gear      = document.getElementById('gear');
+const $gearRing  = document.getElementById('gear-ring');
+const $settingsOv = document.getElementById('settings-overlay');
+const $recOv     = document.getElementById('rec-overlay');
+const $recCount  = document.getElementById('rec-count');
+
+// ── IndexedDB ───────────────────────────────────────────────────────
+const DB = 'babykeys';
+const STORE = 'recordings';
+
+function openDB() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open(DB, 1);
+    r.onupgradeneeded = e => e.target.result.createObjectStore(STORE);
+    r.onsuccess = e => res(e.target.result);
+    r.onerror = e => rej(e.target.error);
+  });
+}
+async function dbPut(key, blob) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(blob, key);
+    tx.oncomplete = () => { db.close(); res(); };
+    tx.onerror = e => { db.close(); rej(e.target.error); };
+  });
+}
+async function dbGet(key) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const r = tx.objectStore(STORE).get(key);
+    r.onsuccess = () => { db.close(); res(r.result); };
+    r.onerror = e => { db.close(); rej(e.target.error); };
+  });
+}
+async function dbClear() {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).clear();
+    tx.oncomplete = () => { db.close(); res(); };
+    tx.onerror = e => { db.close(); rej(e.target.error); };
+  });
+}
+async function dbCount() {
+  const db = await openDB();
+  return new Promise((res, rej) => {
+    const tx = db.transaction(STORE, 'readonly');
+    const r = tx.objectStore(STORE).count();
+    r.onsuccess = () => { db.close(); res(r.result); };
+    r.onerror = e => { db.close(); rej(e.target.error); };
+  });
+}
+
+// ── Audio helpers ───────────────────────────────────────────────────
+function stopCurrent() {
+  clearTimeout(speakTimeout);
+  if (currentSource) {
+    currentSource.pause();
+    currentSource.currentTime = 0;
+    currentSource = null;
+  }
+  speechSynthesis.cancel();
+  currentUtterance = null;
+}
+
+// Preload all recordings as pre-buffered Audio elements for instant playback
+async function loadAudioCache() {
+  for (const [, entry] of audioCache) URL.revokeObjectURL(entry.url);
+  audioCache.clear();
+  try {
+    const db = await openDB();
+    const tx = db.transaction(STORE, 'readonly');
+    const store = tx.objectStore(STORE);
+    const keys = await new Promise(r => { const q = store.getAllKeys(); q.onsuccess = () => r(q.result); });
+    for (const key of keys) {
+      const val = await new Promise(r => { const q = store.get(key); q.onsuccess = () => r(q.result); });
+      if (!val) continue;
+      // Support both formats: raw Blob (old) or { blob, offset } (new)
+      const blob = val instanceof Blob ? val : val.blob;
+      const offset = val instanceof Blob ? 0 : (val.offset || 0);
+      if (!blob) continue;
+      const url = URL.createObjectURL(blob);
+      const a = new Audio();
+      a.preload = 'auto';
+      a.src = url;
+      a.load();
+      audioCache.set(key, { url, audio: a, offset });
+    }
+    db.close();
+    console.log('[cache] pre-buffered', audioCache.size, 'recordings');
+  } catch (e) {
+    console.error('[cache] failed:', e);
+  }
+}
+
+function speakKey(key) {
+  stopCurrent();
+
+  const entry = audioCache.get(key);
+  if (entry) {
+    const a = entry.audio;
+    console.log('[speakKey]', key, 'offset:', entry.offset.toFixed(3), 'duration:', a.duration?.toFixed(3));
+    a.currentTime = entry.offset;
+    currentSource = a;
+    a.play().catch(e => console.error('[speakKey] play failed:', e));
+    return;
+  }
+
+  // Fallback to speech synthesis
+  const name = SPEAK_MAP[key] || key;
+  const u = new SpeechSynthesisUtterance(name);
+  u.rate = 0.9; u.pitch = 1.1;
+  currentUtterance = u;
+  speechSynthesis.speak(u);
+}
+
+// WAV encoding
+function writeStr(v, off, s) { for (let i = 0; i < s.length; i++) v.setUint8(off + i, s.charCodeAt(i)); }
+
+function encodeWav(samples, sr) {
+  const len = samples.length * 2;
+  const buf = new ArrayBuffer(44 + len);
+  const v = new DataView(buf);
+  writeStr(v, 0, 'RIFF');
+  v.setUint32(4, 36 + len, true);
+  writeStr(v, 8, 'WAVE');
+  writeStr(v, 12, 'fmt ');
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true);
+  v.setUint32(28, sr * 2, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  writeStr(v, 36, 'data');
+  v.setUint32(40, len, true);
+  let o = 44;
+  for (let i = 0; i < samples.length; i++) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    v.setInt16(o, s * (s < 0 ? 0x8000 : 0x7FFF), true);
+    o += 2;
+  }
+  return new Blob([buf], { type: 'audio/wav' });
+}
+
+async function trimBlob(blob) {
+  const arr = await blob.arrayBuffer();
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  let decoded;
+  try { decoded = await ctx.decodeAudioData(arr); }
+  catch { ctx.close(); return blob; }
+
+  const data = decoded.getChannelData(0);
+  const sr = decoded.sampleRate;
+  const thr = 0.015;
+  let start = 0, end = data.length - 1;
+  for (let i = 0; i < data.length; i++) if (Math.abs(data[i]) > thr) { start = i; break; }
+  for (let i = data.length - 1; i > start; i--) if (Math.abs(data[i]) > thr) { end = i; break; }
+
+  const margin = Math.floor(sr * 0.04);
+  start = Math.max(0, start - margin);
+  end = Math.min(data.length - 1, end + margin);
+  if (end <= start) { ctx.close(); return blob; }
+
+  // Downsample to 22050 for space
+  const trimmed = data.slice(start, end + 1);
+  const targetSR = Math.min(sr, 22050);
+  let final = trimmed;
+  if (sr > targetSR) {
+    const ratio = sr / targetSR;
+    const newLen = Math.floor(trimmed.length / ratio);
+    final = new Float32Array(newLen);
+    for (let i = 0; i < newLen; i++) final[i] = trimmed[Math.floor(i * ratio)];
+  }
+  ctx.close();
+  return encodeWav(final, targetSR);
+}
+
+// ── Display ─────────────────────────────────────────────────────────
+function nextColor() {
+  const c = COLORS[colorIdx % COLORS.length];
+  colorIdx++;
+  return c;
+}
+
+function displayChar(key) {
+  return DISPLAY_MAP[key] || key;
+}
+
+function fontSize(text) {
+  if (text.length <= 1) return '50vmin';
+  if (text.length <= 3) return '28vmin';
+  return '18vmin';
+}
+
+function showKey(key) {
+  // Fire audio immediately — before any DOM work
+  speakKey(key);
+
+  $prompt.classList.add('hidden');
+  const text = displayChar(key);
+  const color = nextColor();
+
+  $display.classList.remove('show');
+  void $display.offsetWidth;
+  $display.innerHTML = text;
+  $display.style.fontSize = fontSize(text);
+  $display.style.color = color;
+  $display.classList.add('show');
+
+  history.push({ text, color });
+  if (history.length > 5) history.shift();
+  renderHistory();
+}
+
+function renderHistory() {
+  $history.innerHTML = history.map(h =>
+    `<div class="hist" style="background:${h.color}22;color:${h.color}">${h.text}</div>`
+  ).join('');
+}
+
+// ── Key handling ────────────────────────────────────────────────────
+document.addEventListener('keydown', e => {
+  if (overlayOpen) return;
+  if (IGNORE.has(e.key)) return;
+  e.preventDefault();
+  const key = (e.key.length === 1 && /[a-z]/i.test(e.key)) ? e.key.toUpperCase() : e.key;
+  showKey(key);
+});
+document.addEventListener('contextmenu', e => e.preventDefault());
+
+// ── Settings gear (3-second hold) ───────────────────────────────────
+let holdTimer = null, holdStart = 0, holdRAF = null;
+
+function startHold() {
+  if (overlayOpen) return;
+  holdStart = Date.now();
+  holdTimer = setTimeout(openSettings, 3000);
+  (function tick() {
+    const pct = Math.min(100, ((Date.now() - holdStart) / 3000) * 100);
+    $gearRing.style.setProperty('--hold', pct);
+    if (pct < 100) holdRAF = requestAnimationFrame(tick);
+  })();
+}
+function cancelHold() {
+  clearTimeout(holdTimer);
+  cancelAnimationFrame(holdRAF);
+  $gearRing.style.setProperty('--hold', 0);
+}
+
+$gear.addEventListener('mousedown', startHold);
+$gear.addEventListener('mouseup', cancelHold);
+$gear.addEventListener('mouseleave', cancelHold);
+$gear.addEventListener('touchstart', e => { e.preventDefault(); startHold(); }, { passive: false });
+$gear.addEventListener('touchend', cancelHold);
+$gear.addEventListener('touchcancel', cancelHold);
+
+// ── Settings panel ──────────────────────────────────────────────────
+async function openSettings() {
+  cancelHold();
+  overlayOpen = true;
+  const n = await dbCount().catch(() => 0);
+  $recCount.textContent = n > 0
+    ? `${n} custom recording${n > 1 ? 's' : ''} saved.`
+    : 'No custom recordings yet.';
+  $settingsOv.classList.remove('hidden');
+}
+
+function closeSettings() {
+  $settingsOv.classList.add('hidden');
+  overlayOpen = false;
+}
+
+document.getElementById('btn-close-settings').onclick = closeSettings;
+document.getElementById('btn-clear-rec').onclick = async () => {
+  if (confirm('Delete all custom recordings?')) {
+    await dbClear();
+    $recCount.textContent = 'No custom recordings yet.';
+  }
+};
+document.getElementById('btn-record-voices').onclick = () => {
+  $settingsOv.classList.add('hidden');
+  startRecordingSession();
+};
+
+// ── Recording session ───────────────────────────────────────────────
+let recIdx = 0;
+let recStream = null;
+let recMediaRec = null;
+let recChunks = [];
+let recAnalyser = null;
+let recAudioCtx = null;
+let recActive = false;
+let recBlob = null;
+let recVadRAF = null;
+let recTimeout = null;
+let recStartTime = 0;      // performance.now() when MediaRecorder started
+let recSpeechOnset = null;  // performance.now() when speech first detected
+
+const $recChar     = document.getElementById('rec-char');
+const $recName     = document.getElementById('rec-name');
+const $recStatus   = document.getElementById('rec-status');
+const $recProgress = document.getElementById('rec-progress');
+const $recMeter    = document.getElementById('rec-meter-fill');
+const $btnBack     = document.getElementById('btn-rec-back');
+const $btnSkip     = document.getElementById('btn-rec-skip');
+const $btnDone     = document.getElementById('btn-rec-done');
+let recPaused = false;
+
+async function startRecordingSession() {
+  try {
+    recStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch {
+    alert('Microphone access is required for recording.');
+    overlayOpen = false;
+    return;
+  }
+  recAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const src = recAudioCtx.createMediaStreamSource(recStream);
+  recAnalyser = recAudioCtx.createAnalyser();
+  recAnalyser.fftSize = 256;
+  src.connect(recAnalyser);
+
+  recIdx = 0;
+  recPaused = false;
+  $recOv.classList.remove('hidden');
+  showAndRecord();
+}
+
+function endRecordingSession() {
+  recActive = false;
+  recPaused = true;
+  clearTimeout(recTimeout);
+  cancelAnimationFrame(recVadRAF);
+  if (recMediaRec && recMediaRec.state !== 'inactive') recMediaRec.stop();
+  if (recStream) { recStream.getTracks().forEach(t => t.stop()); recStream = null; }
+  if (recAudioCtx) { recAudioCtx.close().catch(() => {}); recAudioCtx = null; }
+  $recOv.classList.add('hidden');
+  overlayOpen = false;
+  // Reload cache with new recordings (allow time for final onstop saves)
+  setTimeout(() => loadAudioCache(), 300);
+}
+
+// Show current letter and immediately start recording
+function showAndRecord() {
+  if (recIdx >= RECORD_SEQ.length) { endRecordingSession(); return; }
+  if (recPaused) return;
+
+  const key = RECORD_SEQ[recIdx];
+  $recChar.innerHTML = displayChar(key);
+  $recChar.style.fontSize = key.length <= 1 ? '28vmin' : '14vmin';
+  $recName.textContent = SPEAK_MAP[key] || key;
+  $recProgress.textContent = `${recIdx + 1} / ${RECORD_SEQ.length}`;
+  $recStatus.textContent = 'Listening...';
+  $recMeter.style.width = '0';
+
+  // Start recording immediately
+  recActive = true;
+  recChunks = [];
+  recSpeechOnset = null;
+  recMediaRec = new MediaRecorder(recStream);
+  recMediaRec.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
+  recMediaRec.start(50);
+  recStartTime = performance.now();
+
+  // VAD with 150ms silence detection
+  const freqData = new Uint8Array(recAnalyser.frequencyBinCount);
+  let speaking = false, silenceStart = null;
+  const THRESH = 20, SILENCE_MS = 150;
+
+  recTimeout = setTimeout(() => finishCurrentRec(), 6000);
+
+  (function tick() {
+    if (!recActive) return;
+    recAnalyser.getByteFrequencyData(freqData);
+    const level = freqData.reduce((a, b) => a + b, 0) / freqData.length;
+    $recMeter.style.width = Math.min(100, level * 1.5) + '%';
+
+    if (level > THRESH) {
+      if (!speaking) {
+        speaking = true;
+        recSpeechOnset = performance.now();
+      }
+      silenceStart = null;
+      $recStatus.textContent = 'Recording...';
+    } else if (speaking) {
+      if (!silenceStart) silenceStart = Date.now();
+      else if (Date.now() - silenceStart > SILENCE_MS) {
+        finishCurrentRec();
+        return;
+      }
+    }
+    recVadRAF = requestAnimationFrame(tick);
+  })();
+}
+
+function finishCurrentRec() {
+  if (!recActive) return;
+  recActive = false;
+  clearTimeout(recTimeout);
+  cancelAnimationFrame(recVadRAF);
+  $recMeter.style.width = '0';
+
+  // Snapshot everything before advancing
+  const localChunks = recChunks.slice();
+  const keyForSave = RECORD_SEQ[recIdx];
+  const mime = recMediaRec.mimeType;
+  const mr = recMediaRec;
+  // Speech offset: how far into the blob the actual speech starts (minus 30ms margin)
+  const offset = recSpeechOnset
+    ? Math.max(0, (recSpeechOnset - recStartTime - 30) / 1000)
+    : 0;
+
+  // Redirect final data events to our local array (not the next recording's)
+  mr.ondataavailable = e => { if (e.data.size > 0) localChunks.push(e.data); };
+  mr.onstop = () => {
+    if (localChunks.length > 0) {
+      const raw = new Blob(localChunks, { type: mime });
+      dbPut(keyForSave, { blob: raw, offset }).catch(() => {});
+    }
+  };
+  if (mr.state !== 'inactive') mr.stop();
+
+  // Advance immediately — safe because we captured everything above
+  recIdx++;
+  showAndRecord();
+}
+
+$btnSkip.onclick = () => {
+  recActive = false;
+  clearTimeout(recTimeout);
+  cancelAnimationFrame(recVadRAF);
+  if (recMediaRec && recMediaRec.state !== 'inactive') {
+    recMediaRec.onstop = null;
+    recMediaRec.stop();
+  }
+  recIdx++;
+  showAndRecord();
+};
+
+$btnBack.onclick = () => {
+  recActive = false;
+  clearTimeout(recTimeout);
+  cancelAnimationFrame(recVadRAF);
+  if (recMediaRec && recMediaRec.state !== 'inactive') {
+    recMediaRec.onstop = null;
+    recMediaRec.stop();
+  }
+  if (recIdx > 0) recIdx--;
+  showAndRecord();
+};
+
+$btnDone.onclick = () => endRecordingSession();
+
+// ── Init ────────────────────────────────────────────────────────────
+// Pre-load voices
+if ('speechSynthesis' in window) {
+  speechSynthesis.getVoices();
+  speechSynthesis.onvoiceschanged = () => speechSynthesis.getVoices();
+}
+
+// Start button: unlocks audio context + speech synthesis with user gesture
+document.getElementById('btn-start').onclick = async () => {
+  // Unlock Audio element playback with user gesture
+  const a = new Audio();
+  a.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+  await a.play().catch(() => {});
+
+  // Preload all recordings into memory for instant playback
+  await loadAudioCache();
+
+  document.getElementById('start-screen').classList.add('hidden');
+  document.getElementById('main').classList.remove('hidden');
+};
+</script>
+</body>
+</html>
