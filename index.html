@@ -153,6 +153,8 @@ html, body {
     <p id="rec-count"></p>
     <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-start">
       <button class="btn btn-p" id="btn-record-voices">Record Custom Voices</button>
+      <button class="btn btn-s" id="btn-export-rec">Export Recordings</button>
+      <button class="btn btn-s" id="btn-import-rec">Import Recordings</button>
       <button class="btn btn-d" id="btn-clear-rec">Clear All Recordings</button>
       <button class="btn btn-s" id="btn-close-settings">Close</button>
     </div>
@@ -228,10 +230,11 @@ const RECORD_SEQ = [
 let history = [];
 let overlayOpen = false;
 let colorIdx = 0;
-let currentSource = null;  // Audio element for stopping playback
-let currentUtterance = null;  // prevent GC of SpeechSynthesisUtterance
+const MAX_VOICES = 5;
+let activeVoices = [];  // Audio elements currently playing
+let currentUtterance = null;
 let speakTimeout = null;
-const audioCache = new Map();  // key -> objectURL, preloaded on start
+const audioCache = new Map();  // key -> { url, audio }
 
 // ── Elements ────────────────────────────────────────────────────────
 const $display   = document.getElementById('display');
@@ -293,13 +296,10 @@ async function dbCount() {
 }
 
 // ── Audio helpers ───────────────────────────────────────────────────
-function stopCurrent() {
+function stopAll() {
   clearTimeout(speakTimeout);
-  if (currentSource) {
-    currentSource.pause();
-    currentSource.currentTime = 0;
-    currentSource = null;
-  }
+  for (const a of activeVoices) { a.pause(); a.currentTime = 0; }
+  activeVoices = [];
   speechSynthesis.cancel();
   currentUtterance = null;
 }
@@ -318,14 +318,13 @@ async function loadAudioCache() {
       if (!val) continue;
       // Support both formats: raw Blob (old) or { blob, offset } (new)
       const blob = val instanceof Blob ? val : val.blob;
-      const offset = val instanceof Blob ? 0 : (val.offset || 0);
       if (!blob) continue;
       const url = URL.createObjectURL(blob);
       const a = new Audio();
       a.preload = 'auto';
       a.src = url;
       a.load();
-      audioCache.set(key, { url, audio: a, offset });
+      audioCache.set(key, { url, audio: a });
     }
     db.close();
     console.log('[cache] pre-buffered', audioCache.size, 'recordings');
@@ -335,14 +334,22 @@ async function loadAudioCache() {
 }
 
 function speakKey(key) {
-  stopCurrent();
+  // Evict oldest voice if at capacity
+  while (activeVoices.length >= MAX_VOICES) {
+    const old = activeVoices.shift();
+    old.pause();
+    old.currentTime = 0;
+  }
 
   const entry = audioCache.get(key);
   if (entry) {
-    const a = entry.audio;
-    console.log('[speakKey]', key, 'offset:', entry.offset.toFixed(3), 'duration:', a.duration?.toFixed(3));
-    a.currentTime = entry.offset;
-    currentSource = a;
+    // Clone a new Audio from the same URL so multiple can play simultaneously
+    const a = new Audio(entry.url);
+    a.onended = () => {
+      const idx = activeVoices.indexOf(a);
+      if (idx !== -1) activeVoices.splice(idx, 1);
+    };
+    activeVoices.push(a);
     a.play().catch(e => console.error('[speakKey] play failed:', e));
     return;
   }
@@ -524,6 +531,71 @@ document.getElementById('btn-record-voices').onclick = () => {
   startRecordingSession();
 };
 
+// Export: pack all recordings into a single .babykeys file (JSON with base64 blobs)
+document.getElementById('btn-export-rec').onclick = async () => {
+  const db = await openDB();
+  const tx = db.transaction(STORE, 'readonly');
+  const store = tx.objectStore(STORE);
+  const keys = await new Promise(r => { const q = store.getAllKeys(); q.onsuccess = () => r(q.result); });
+  const recordings = {};
+  for (const key of keys) {
+    const val = await new Promise(r => { const q = store.get(key); q.onsuccess = () => r(q.result); });
+    const blob = val instanceof Blob ? val : val.blob;
+    if (!blob) continue;
+    const buf = await blob.arrayBuffer();
+    recordings[key] = { type: blob.type, data: btoa(String.fromCharCode(...new Uint8Array(buf))) };
+  }
+  db.close();
+  const json = JSON.stringify(recordings);
+  const dl = document.createElement('a');
+  dl.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+  dl.download = 'recordings.babykeys';
+  dl.click();
+  URL.revokeObjectURL(dl.href);
+};
+
+// Import: load a .babykeys file into IndexedDB
+document.getElementById('btn-import-rec').onclick = () => {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.babykeys,application/json';
+  input.onchange = async () => {
+    const file = input.files[0];
+    if (!file) return;
+    try {
+      const json = JSON.parse(await file.text());
+      await importRecordings(json);
+      const n = await dbCount().catch(() => 0);
+      $recCount.textContent = `${n} custom recording${n > 1 ? 's' : ''} saved.`;
+      await loadAudioCache();
+    } catch (e) {
+      alert('Invalid recording file: ' + e.message);
+    }
+  };
+  input.click();
+};
+
+async function importRecordings(json) {
+  for (const [key, rec] of Object.entries(json)) {
+    const bytes = Uint8Array.from(atob(rec.data), c => c.charCodeAt(0));
+    const blob = new Blob([bytes], { type: rec.type });
+    await dbPut(key, blob);
+  }
+}
+
+// On startup, load bundled recordings from repo if no custom recordings exist
+async function loadBundledRecordings() {
+  const count = await dbCount().catch(() => 0);
+  if (count > 0) return; // user already has recordings
+  try {
+    const resp = await fetch('recordings.babykeys');
+    if (!resp.ok) return;
+    const json = await resp.json();
+    await importRecordings(json);
+    console.log('[init] loaded bundled recordings');
+  } catch { /* no bundled file, that's fine */ }
+}
+
 // ── Recording session ───────────────────────────────────────────────
 let recIdx = 0;
 let recStream = null;
@@ -535,8 +607,6 @@ let recActive = false;
 let recBlob = null;
 let recVadRAF = null;
 let recTimeout = null;
-let recStartTime = 0;      // performance.now() when MediaRecorder started
-let recSpeechOnset = null;  // performance.now() when speech first detected
 
 const $recChar     = document.getElementById('rec-char');
 const $recName     = document.getElementById('rec-name');
@@ -595,16 +665,14 @@ function showAndRecord() {
   $recStatus.textContent = 'Listening...';
   $recMeter.style.width = '0';
 
-  // Start recording immediately
+  // Start MediaRecorder immediately so we capture the attack of speech.
+  // VAD controls when we STOP, not when we start.
   recActive = true;
   recChunks = [];
-  recSpeechOnset = null;
   recMediaRec = new MediaRecorder(recStream);
   recMediaRec.ondataavailable = e => { if (e.data.size > 0) recChunks.push(e.data); };
   recMediaRec.start(50);
-  recStartTime = performance.now();
 
-  // VAD with 150ms silence detection
   const freqData = new Uint8Array(recAnalyser.frequencyBinCount);
   let speaking = false, silenceStart = null;
   const THRESH = 20, SILENCE_MS = 150;
@@ -618,10 +686,7 @@ function showAndRecord() {
     $recMeter.style.width = Math.min(100, level * 1.5) + '%';
 
     if (level > THRESH) {
-      if (!speaking) {
-        speaking = true;
-        recSpeechOnset = performance.now();
-      }
+      speaking = true;
       silenceStart = null;
       $recStatus.textContent = 'Recording...';
     } else if (speaking) {
@@ -642,32 +707,33 @@ function finishCurrentRec() {
   cancelAnimationFrame(recVadRAF);
   $recMeter.style.width = '0';
 
-  // Snapshot everything before advancing
+  // If no speech was detected, recorder was never started — skip
+  if (!recMediaRec || recMediaRec.state === 'inactive') {
+    recIdx++;
+    showAndRecord();
+    return;
+  }
+
   const localChunks = recChunks.slice();
   const keyForSave = RECORD_SEQ[recIdx];
   const mime = recMediaRec.mimeType;
   const mr = recMediaRec;
-  // Speech offset: how far into the blob the actual speech starts (minus 30ms margin)
-  const offset = recSpeechOnset
-    ? Math.max(0, (recSpeechOnset - recStartTime - 30) / 1000)
-    : 0;
 
-  // Redirect final data events to our local array (not the next recording's)
   mr.ondataavailable = e => { if (e.data.size > 0) localChunks.push(e.data); };
   mr.onstop = () => {
     if (localChunks.length > 0) {
       const raw = new Blob(localChunks, { type: mime });
-      dbPut(keyForSave, { blob: raw, offset }).catch(() => {});
+      dbPut(keyForSave, raw).catch(() => {});
     }
   };
-  if (mr.state !== 'inactive') mr.stop();
+  mr.stop();
 
   // Advance immediately — safe because we captured everything above
   recIdx++;
   showAndRecord();
 }
 
-$btnSkip.onclick = () => {
+function abandonCurrentRec() {
   recActive = false;
   clearTimeout(recTimeout);
   cancelAnimationFrame(recVadRAF);
@@ -675,21 +741,11 @@ $btnSkip.onclick = () => {
     recMediaRec.onstop = null;
     recMediaRec.stop();
   }
-  recIdx++;
-  showAndRecord();
-};
+  recMediaRec = null;
+}
 
-$btnBack.onclick = () => {
-  recActive = false;
-  clearTimeout(recTimeout);
-  cancelAnimationFrame(recVadRAF);
-  if (recMediaRec && recMediaRec.state !== 'inactive') {
-    recMediaRec.onstop = null;
-    recMediaRec.stop();
-  }
-  if (recIdx > 0) recIdx--;
-  showAndRecord();
-};
+$btnSkip.onclick = () => { abandonCurrentRec(); recIdx++; showAndRecord(); };
+$btnBack.onclick = () => { abandonCurrentRec(); if (recIdx > 0) recIdx--; showAndRecord(); };
 
 $btnDone.onclick = () => endRecordingSession();
 
@@ -707,7 +763,8 @@ document.getElementById('btn-start').onclick = async () => {
   a.src = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
   await a.play().catch(() => {});
 
-  // Preload all recordings into memory for instant playback
+  // Load bundled recordings if no custom ones exist, then cache everything
+  await loadBundledRecordings();
   await loadAudioCache();
 
   document.getElementById('start-screen').classList.add('hidden');
