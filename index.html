@@ -803,6 +803,9 @@ document.getElementById('btn-start').onclick = async () => {
   await loadBundledRecordings();
   await loadAudioCache();
 
+  // Request fullscreen (user gesture required, so do it here)
+  document.documentElement.requestFullscreen().catch(() => {});
+
   document.getElementById('start-screen').classList.add('hidden');
   document.getElementById('main').classList.remove('hidden');
 };
